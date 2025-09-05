@@ -1,11 +1,285 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8" />
-  <title>My Webpage</title>
-  <link rel="stylesheet" href="/static/style.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        .chat-container {
+            height: calc(100vh - 10rem);
+            max-height: 800px;
+        }
+
+        .message-bubble {
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
 </head>
-<body>
-<h1>hello</h1>
+
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <!-- Main Chat Container -->
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 my-8 p-6 flex flex-col h-[90vh]">
+        <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200">
+            <h1 class="text-2xl font-bold text-gray-800">Live Chat</h1>
+            <div class="flex items-center space-x-2">
+                <span class="text-gray-600 text-sm font-medium hidden md:inline">User ID:</span>
+                <span id="user-id" class="font-mono text-xs md:text-sm text-blue-600 bg-blue-100 px-2 py-1 rounded-full cursor-pointer transition-all hover:bg-blue-200"
+                    onclick="copyUserId()"></span>
+                <button onclick="copyUserId()" class="p-1 rounded-full text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-300">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5H20M8 5v12h4m-4 0h4m-4-8h4m-4-8z">
+                        </path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Messages Display Area -->
+        <div id="messages" class="flex-1 overflow-y-auto space-y-4 pr-2 scrollbar-hide">
+            <!-- Messages will be injected here -->
+            <div id="loading-spinner" class="flex justify-center items-center h-full">
+                <div class="w-8 h-8 rounded-full animate-spin border-4 border-solid border-gray-200 border-t-blue-500"></div>
+            </div>
+        </div>
+
+        <!-- Message Input Form -->
+        <div class="mt-4 pt-4 border-t border-gray-200">
+            <form id="chat-form" class="flex space-x-3">
+                <input id="message-input" type="text" placeholder="Type your message..."
+                    class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <button id="send-button" type="submit" disabled
+                    class="bg-blue-500 text-white rounded-lg px-6 py-3 font-semibold disabled:opacity-50 transition-all hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                    Send
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Username Modal -->
+    <div id="username-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl p-8 w-full max-w-md mx-4">
+            <h2 class="text-2xl font-bold mb-4 text-gray-800">Enter Your Username</h2>
+            <p class="text-gray-600 mb-6">Please choose a username to join the chat.</p>
+            <form id="username-form" class="space-y-4">
+                <input type="text" id="username-input" placeholder="Your Username"
+                    class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    maxlength="20" required />
+                <button type="submit"
+                    class="w-full bg-green-500 text-white font-semibold py-3 rounded-lg transition-all hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                    Start Chatting
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Message Box for copy success/error -->
+    <div id="message-box" class="fixed bottom-6 right-6 p-4 rounded-lg shadow-lg text-white transform translate-y-24 transition-transform duration-300 ease-in-out">
+        <p id="message-box-text"></p>
+    </div>
+
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables for Firebase configuration
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const authToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Set Firebase log level for debugging
+        setLogLevel('debug');
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        const chatForm = document.getElementById('chat-form');
+        const messageInput = document.getElementById('message-input');
+        const messagesContainer = document.getElementById('messages');
+        const sendButton = document.getElementById('send-button');
+        const usernameModal = document.getElementById('username-modal');
+        const usernameForm = document.getElementById('username-form');
+        const usernameInput = document.getElementById('username-input');
+        const userIdDisplay = document.getElementById('user-id');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        let username = null;
+        let userId = null;
+        let isAuthReady = false;
+
+        // Message Box functionality
+        function showMessage(text, isError = false) {
+            const messageBox = document.getElementById('message-box');
+            const messageBoxText = document.getElementById('message-box-text');
+            messageBoxText.textContent = text;
+            messageBox.className = 'fixed bottom-6 right-6 p-4 rounded-lg shadow-lg text-white transform transition-transform duration-300 ease-in-out';
+            if (isError) {
+                messageBox.classList.add('bg-red-500');
+            } else {
+                messageBox.classList.add('bg-gray-800');
+            }
+            // Show the message box
+            setTimeout(() => {
+                messageBox.classList.add('translate-y-0');
+            }, 50);
+            // Hide the message box after a few seconds
+            setTimeout(() => {
+                messageBox.classList.remove('translate-y-0');
+            }, 3000);
+        }
+
+        // Initialize and authenticate Firebase
+        async function initializeAppAndAuth() {
+            try {
+                if (authToken) {
+                    await signInWithCustomToken(auth, authToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                userId = auth.currentUser?.uid || crypto.randomUUID();
+                userIdDisplay.textContent = userId.substring(0, 8) + '...';
+                isAuthReady = true;
+                loadingSpinner.style.display = 'none';
+                startListeningForMessages();
+            } catch (error) {
+                console.error("Firebase auth error:", error);
+                showMessage('Authentication failed. Please refresh.', true);
+            }
+        }
+
+        // Firestore collection reference
+        const publicChatCollectionPath = `/artifacts/${appId}/public/data/chat_messages`;
+        const chatCollectionRef = collection(db, publicChatCollectionPath);
+
+        function startListeningForMessages() {
+            if (!isAuthReady) return;
+
+            // Using onSnapshot to get real-time updates
+            // Note: We're not using orderBy() to avoid index requirement issues.
+            const q = query(chatCollectionRef);
+
+            onSnapshot(q, (snapshot) => {
+                const messages = [];
+                snapshot.forEach(doc => {
+                    messages.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Sort messages in memory by timestamp.
+                messages.sort((a, b) => a.timestamp - b.timestamp);
+                
+                renderMessages(messages);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }, (error) => {
+                console.error("Error fetching messages: ", error);
+                showMessage("Failed to load messages.", true);
+            });
+        }
+
+        // Render messages to the UI
+        function renderMessages(messages) {
+            messagesContainer.innerHTML = '';
+            messages.forEach(msg => {
+                const isUserMessage = msg.userId === userId;
+                const messageHtml = `
+                    <div class="flex items-start ${isUserMessage ? 'justify-end' : ''}">
+                        <div class="message-bubble rounded-xl p-3 shadow ${isUserMessage ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'}"
+                            title="Sent by ${msg.username} on ${new Date(msg.timestamp?.toDate()).toLocaleString()}">
+                            <p class="font-bold text-sm ${isUserMessage ? 'text-white' : 'text-gray-800'}">${msg.username}</p>
+                            <p class="mt-1">${msg.text}</p>
+                        </div>
+                    </div>
+                `;
+                messagesContainer.innerHTML += messageHtml;
+            });
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // Handle sending a new message
+        async function sendMessage(e) {
+            e.preventDefault();
+            const text = messageInput.value.trim();
+
+            if (!text || !username) {
+                if (!username) {
+                    showMessage("Please set your username first.", true);
+                }
+                return;
+            }
+
+            try {
+                await addDoc(chatCollectionRef, {
+                    username: username,
+                    text: text,
+                    userId: userId,
+                    timestamp: serverTimestamp()
+                });
+                messageInput.value = '';
+            } catch (error) {
+                console.error("Error sending message:", error);
+                showMessage("Failed to send message.", true);
+            }
+        }
+
+        // Handle username form submission
+        usernameForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const newUsername = usernameInput.value.trim();
+            if (newUsername) {
+                username = newUsername;
+                usernameModal.classList.add('hidden');
+                sendButton.disabled = false;
+                showMessage(`Welcome, ${username}! You can now chat.`);
+            } else {
+                showMessage("Username cannot be empty.", true);
+            }
+        });
+
+        // Event listener for message form submission
+        chatForm.addEventListener('submit', sendMessage);
+
+        // Function to copy user ID to clipboard
+        function copyUserId() {
+            const userId = auth.currentUser?.uid;
+            if (userId) {
+                const tempInput = document.createElement('input');
+                tempInput.value = userId;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                try {
+                    document.execCommand('copy');
+                    showMessage("User ID copied to clipboard!");
+                } catch (err) {
+                    console.error('Failed to copy text: ', err);
+                    showMessage("Failed to copy User ID.", true);
+                }
+                document.body.removeChild(tempInput);
+            }
+        }
+
+        // Initial setup on window load
+        window.onload = initializeAppAndAuth;
+    </script>
 </body>
+
 </html>
